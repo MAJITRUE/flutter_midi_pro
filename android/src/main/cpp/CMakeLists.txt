@@ -8,6 +8,54 @@ cmake_minimum_required(VERSION 3.4.1)
 set(fluidsynth_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fluidsynth)
 # Our code (native-lib.cpp) will be calling fluidsynth functions, so we add the fluidsynth binaries as dependencies of our code.
 
+# Android NDK yolunu otomatik olarak al
+set(NDK_ROOT ${ANDROID_NDK})
+
+# ABI'ya göre yeni NDK yolundaki klasör adını eşle
+if(${ANDROID_ABI} STREQUAL "arm64-v8a")
+    set(OMP_ARCH "aarch64")
+elseif(${ANDROID_ABI} STREQUAL "armeabi-v7a")
+    set(OMP_ARCH "arm")
+elseif(${ANDROID_ABI} STREQUAL "x86")
+    set(OMP_ARCH "i386")
+elseif(${ANDROID_ABI} STREQUAL "x86_64")
+    set(OMP_ARCH "x86_64")
+elseif(${ANDROID_ABI} STREQUAL "riscv64")
+    set(OMP_ARCH "riscv64")
+else()
+    message(FATAL_ERROR "Unsupported ABI: ${ANDROID_ABI}")
+endif()
+
+# Clang sürümünü otomatik almak için (örnek: 18)
+file(GLOB CLANG_DIR "${NDK_ROOT}/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/*")
+list(GET CLANG_DIR 0 CLANG_PATH)
+get_filename_component(CLANG_VERSION ${CLANG_PATH} NAME)
+
+set(LIBOMP_PATH "${NDK_ROOT}/toolchains/llvm/prebuilt/windows-x86_64/lib/clang/${CLANG_VERSION}/lib/linux/${OMP_ARCH}/libomp.so")
+
+add_library(libomp SHARED IMPORTED)
+set_target_properties(libomp PROPERTIES IMPORTED_LOCATION ${LIBOMP_PATH})
+
+# libc++_shared.so için ABI'ya göre NDK içindeki doğru klasör adını eşle
+if(${ANDROID_ABI} STREQUAL "arm64-v8a")
+    set(CPP_SHARED_ARCH "aarch64-linux-android")
+elseif(${ANDROID_ABI} STREQUAL "armeabi-v7a")
+    set(CPP_SHARED_ARCH "arm-linux-androideabi")
+elseif(${ANDROID_ABI} STREQUAL "x86")
+    set(CPP_SHARED_ARCH "i686-linux-android")
+elseif(${ANDROID_ABI} STREQUAL "x86_64")
+    set(CPP_SHARED_ARCH "x86_64-linux-android")
+elseif(${ANDROID_ABI} STREQUAL "riscv64")
+    set(CPP_SHARED_ARCH "riscv64-linux-android")
+else()
+    message(FATAL_ERROR "Unsupported ABI: ${ANDROID_ABI}")
+endif()
+
+set(LIBCXX_SHARED_PATH "${NDK_ROOT}/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/${CPP_SHARED_ARCH}/libc++_shared.so")
+
+add_library(libc++_shared SHARED IMPORTED)
+set_target_properties(libc++_shared PROPERTIES IMPORTED_LOCATION ${LIBCXX_SHARED_PATH})
+
 add_library(libFLAC SHARED IMPORTED)
 set_target_properties(libFLAC PROPERTIES IMPORTED_LOCATION ${fluidsynth_DIR}/lib/${ANDROID_ABI}/libFLAC.so)
 
@@ -71,6 +119,8 @@ target_include_directories(native-lib PRIVATE ${fluidsynth_DIR}/include)
 # Link everything alltogether. Notice that native-lib should be the first element in the list.
 target_link_libraries(
         native-lib
+        libc++_shared
+        libomp
         libFLAC
         libfluidsynth
         libfluidsynth-assetloader
