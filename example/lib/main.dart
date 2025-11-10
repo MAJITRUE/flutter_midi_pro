@@ -1,9 +1,15 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_midi_pro/flutter_midi_pro.dart';
 import 'package:flutter_piano_pro/flutter_piano_pro.dart';
 import 'package:flutter_piano_pro/note_model.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Initialize Google Mobile Ads SDK
+  MobileAds.instance.initialize();
   runApp(const MyApp());
 }
 
@@ -25,11 +31,101 @@ class _MyAppState extends State<MyApp> {
   final sustainOn = ValueNotifier<bool>(false);
   Map<int, NoteModel> pointerAndNote = {};
 
+  // --- AdMob (Interstitial) ---
+  InterstitialAd? _interstitialAd;
+  bool _isAdLoading = false;
+  bool _isAdReady = false;
+
+  String get _testInterstitialUnitId => Platform.isAndroid
+      ? 'ca-app-pub-3940256099942544/1033173712'
+      : 'ca-app-pub-3940256099942544/4411468910';
+
+  Future<void> _loadInterstitial() async {
+    if (_isAdLoading || _interstitialAd != null) return;
+    setState(() {
+      _isAdLoading = true;
+      _isAdReady = false;
+    });
+
+    await InterstitialAd.load(
+      adUnitId: _testInterstitialUnitId,
+      request: const AdRequest(),
+      adLoadCallback: InterstitialAdLoadCallback(
+        onAdLoaded: (ad) {
+          _interstitialAd = ad
+            ..fullScreenContentCallback = FullScreenContentCallback(
+              onAdShowedFullScreenContent: (ad) {
+                debugPrint('Interstitial shown');
+              },
+              onAdDismissedFullScreenContent: (ad) async {
+                debugPrint('Interstitial dismissed');
+                ad.dispose();
+                setState(() {
+                  _interstitialAd = null;
+                  _isAdReady = false;
+                });
+                // After ad dismissed, optionally play a short test note
+                await _playTestNoteIfReady();
+              },
+              onAdFailedToShowFullScreenContent: (ad, err) {
+                debugPrint('Failed to show interstitial: $err');
+                ad.dispose();
+                setState(() {
+                  _interstitialAd = null;
+                  _isAdReady = false;
+                });
+              },
+            );
+          setState(() {
+            _isAdLoading = false;
+            _isAdReady = true;
+          });
+        },
+        onAdFailedToLoad: (error) {
+          debugPrint('Interstitial failed to load: $error');
+          setState(() {
+            _isAdLoading = false;
+            _isAdReady = false;
+          });
+        },
+      ),
+    );
+  }
+
+  Future<void> _showInterstitial() async {
+    if (_interstitialAd == null) {
+      await _loadInterstitial();
+    }
+    if (_interstitialAd != null) {
+      _interstitialAd!.show();
+    }
+  }
+
+  Future<void> _playTestNoteIfReady() async {
+    // Plays middle C quickly to verify audio still works after an ad.
+    final sfId =
+        selectedSfId.value ??
+        (loadedSoundfonts.value.isNotEmpty ? loadedSoundfonts.value.keys.first : null);
+    if (sfId == null) return;
+    try {
+      await midiPro.playNote(
+        channel: channelIndex.value,
+        key: 60,
+        velocity: volume.value,
+        sfId: sfId,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await midiPro.stopNote(channel: channelIndex.value, key: 60, sfId: sfId);
+    } catch (e) {
+      debugPrint('Test note error: $e');
+    }
+  }
+
   /// Loads a soundfont file from the specified path.
   /// Returns the soundfont ID.
   Future<int> loadSoundfont(String path, int bank, int program) async {
     if (loadedSoundfonts.value.containsValue(path)) {
-      print('Soundfont file: $path already loaded. Returning ID.');
+      debugPrint('Soundfont file: $path already loaded. Returning ID.');
       return loadedSoundfonts.value.entries.firstWhere((element) => element.value == path).key;
     }
     final int sfId = await midiPro.loadSoundfontAsset(
@@ -38,7 +134,7 @@ class _MyAppState extends State<MyApp> {
       program: program,
     );
     loadedSoundfonts.value = {sfId: path, ...loadedSoundfonts.value};
-    print('Loaded soundfont file: $path with ID: $sfId');
+    debugPrint('Loaded soundfont file: $path with ID: $sfId');
     return sfId;
   }
 
@@ -55,7 +151,7 @@ class _MyAppState extends State<MyApp> {
     } else {
       selectedSfId.value = sfId;
     }
-    print('Selected soundfont file: $sfIdValue');
+    debugPrint('Selected soundfont file: $sfIdValue');
     await midiPro.selectInstrument(sfId: sfIdValue, channel: channel, bank: bank, program: program);
   }
 
@@ -109,6 +205,57 @@ class _MyAppState extends State<MyApp> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: <Widget>[
                   const SizedBox(height: 10),
+                  // AdMob test controls
+                  Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Text(
+                            'AdMob Interstitial Test',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            children: [
+                              ElevatedButton(
+                                onPressed: _isAdLoading ? null : _loadInterstitial,
+                                child: Text(
+                                  _isAdLoading
+                                      ? 'Loading…'
+                                      : (_isAdReady ? 'Reload Ad' : 'Load Ad'),
+                                ),
+                              ),
+                              ElevatedButton(
+                                onPressed: _isAdReady ? _showInterstitial : null,
+                                child: const Text('Show Interstitial'),
+                              ),
+                              ElevatedButton(
+                                onPressed: _isAdReady
+                                    ? () async {
+                                        await _showInterstitial();
+                                        // Note is played in onAdDismissed callback
+                                      }
+                                    : null,
+                                child: const Text('Show Ad → Test Note'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Ad status: '
+                            '${_isAdLoading
+                                ? 'loading'
+                                : _isAdReady
+                                ? 'ready'
+                                : 'idle'}',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Row(
@@ -398,7 +545,7 @@ class _MyAppState extends State<MyApp> {
                               if (selectedSfIdValue == null)
                                 Positioned.fill(
                                   child: Container(
-                                    color: Colors.black.withOpacity(0.5),
+                                    color: Colors.black.withValues(alpha: 0.5),
                                     child: const Center(
                                       child: Text(
                                         'Load Soundfont file\nMust be called before other methods',
